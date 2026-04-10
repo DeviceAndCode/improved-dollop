@@ -43,8 +43,9 @@ jobs:
       - name: Verify signature
         if: env.HAS_WINDOWS_SIGNING == 'true'
         run: |
-          signtool verify /pa /v test-signing.exe
-        shell: cmd
+          $signtool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter signtool.exe | Select-Object -First 1
+          & $signtool.FullName verify /pa /v test-signing.exe
+        shell: pwsh
 
   test_macos_signing:
     name: macOS Signing Test
