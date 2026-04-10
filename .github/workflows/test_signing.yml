@@ -1,0 +1,83 @@
+name: Test Signing
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test_windows_signing:
+    name: Windows Signing Test
+    runs-on: windows-latest
+    steps:
+      - name: Set signing flags
+        env:
+          AZURE_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          if [ -n "$AZURE_TENANT" ]; then echo "HAS_WINDOWS_SIGNING=true" >> $GITHUB_ENV; else echo "HAS_WINDOWS_SIGNING=false" >> $GITHUB_ENV; fi
+        shell: bash
+
+      - name: Create test executable
+        run: |
+          $code = @"
+          using System;
+          class Program { static void Main() { Console.WriteLine("DeviceAndCode signing test"); } }
+          "@
+          $code | Out-File -FilePath test.cs -Encoding UTF8
+          C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /out:test-signing.exe test.cs
+          Write-Host "Created test-signing.exe"
+          dir test-signing.exe
+        shell: pwsh
+
+      - name: Codesign with Azure Trusted Signing
+        if: env.HAS_WINDOWS_SIGNING == 'true'
+        uses: azure/trusted-signing-action@v0.5.11
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_CODE_SIGNING_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}
+          files-folder-filter: exe
+
+      - name: Verify signature
+        if: env.HAS_WINDOWS_SIGNING == 'true'
+        run: |
+          signtool verify /pa /v test-signing.exe
+        shell: cmd
+
+  test_macos_signing:
+    name: macOS Signing Test
+    runs-on: macos-14
+    steps:
+      - name: Set signing flags
+        env:
+          MACOS_CERT: ${{ secrets.DEV_ID_APP_CERT }}
+        run: |
+          if [ -n "$MACOS_CERT" ]; then echo "HAS_MACOS_SIGNING=true" >> $GITHUB_ENV; else echo "HAS_MACOS_SIGNING=false" >> $GITHUB_ENV; fi
+
+      - name: Import Certificates
+        if: env.HAS_MACOS_SIGNING == 'true'
+        uses: sudara/basic-macos-keychain-action@v1
+        id: keychain
+        with:
+          dev-id-app-cert: ${{ secrets.DEV_ID_APP_CERT }}
+          dev-id-app-password: ${{ secrets.DEV_ID_APP_PASSWORD }}
+          dev-id-installer-cert: ${{ secrets.DEV_ID_INSTALLER_CERT }}
+          dev-id-installer-password: ${{ secrets.DEV_ID_INSTALLER_PASSWORD }}
+
+      - name: Create and sign test binary
+        if: env.HAS_MACOS_SIGNING == 'true'
+        run: |
+          echo 'int main() { return 0; }' > test.c
+          clang -o test-signing test.c
+          echo "Created test binary"
+          codesign --force --keychain ${{ steps.keychain.outputs.keychain-path }} -s "${{ secrets.DEVELOPER_ID_APPLICATION }}" -v test-signing --strict --options=runtime --timestamp
+          echo "Signing succeeded"
+
+      - name: Verify signature
+        if: env.HAS_MACOS_SIGNING == 'true'
+        run: |
+          codesign -dvv test-signing
+          codesign --verify --strict test-signing
+          echo "Verification passed"
